@@ -1,0 +1,29 @@
+{
+    "section_flags": {
+        "Chief Complaint": ["Chief Complaint", "Major Surgical or Invasive Procedure"],
+        "History of Present Illness": ["History of Present Illness", "Past Medical History"],
+        "Past Medical History": ["Past Medical History", "Social History"],
+        "Brief Hospital Course": ["Brief Hospital Course", "Medications on Admission"],
+        "Discharge Diagnosis": ["Discharge Diagnosis", "Discharge Condition"]
+    },
+    "without_dropped_sections": {
+        "sections_to_keep": [
+            "Discharge Diagnosis",
+            "Chief Complaint",
+            "Brief Hospital Course",
+            "Past Medical History",
+            "History of Present Illness"
+        ]
+    },
+    "with_dropped_sections": {
+        "sections_to_drop": [
+            "Discharge Diagnosis"
+        ],
+        "sections_to_keep": [
+            "Chief Complaint",
+            "Brief Hospital Course",
+            "Past Medical History",
+            "History of Present Illness"
+        ]
+    }
+}
