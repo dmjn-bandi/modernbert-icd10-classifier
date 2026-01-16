@@ -141,8 +141,6 @@ with gr.Blocks() as demo:
         labels_list = result.get("predicted_labels", [])
         labels_values = result.get("labels_n_values", {})
 
-        descriptions = result.get("labels_n_descriptions", {})
-
         table_data = []
         for label in labels_list:
             match = CHAPTER_DESCRIPTIONS[CHAPTER_DESCRIPTIONS["chapter"] == label]
