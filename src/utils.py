@@ -11,7 +11,10 @@ import torch
 from pathlib import Path
 from spacy import Language
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
-
+import json
+from sklearn.metrics import f1_score, accuracy_score, roc_auc_score, precision_score, recall_score, classification_report
+from transformers import Trainer
+from scipy.special import expit
 
 def make_pattern(flag: str) -> Pattern:
     if not isinstance(flag, str):
@@ -299,6 +302,80 @@ def split_dataframe(df: pd.DataFrame,
     return df_train, df_val, df_test, mlb, num_labels
 
 
+def evaluate_finetuned(model, training_args, compute_metrics, data_collator, dataset, threshold, mlb):
+
+    eval_trainer = Trainer(
+        model=model,
+        args=training_args,
+        compute_metrics=compute_metrics,
+        data_collator=data_collator,
+        eval_dataset=dataset
+    )
+
+    results = eval_trainer.predict(dataset)
+
+    logits = results.predictions
+    labels = results.label_ids
+
+    probs = expit(logits)
+    preds = (probs >= threshold).astype(int)
+
+    report = classification_report(
+        labels,
+        preds,
+        target_names=mlb.classes_,
+        zero_division=0,
+        output_dict=True
+    )
+
+    report = pd.DataFrame(report).transpose()
+    summary_metrics = ["micro avg", "macro avg", "weighted avg", "samples avg"]
+    main_report = report.drop(index=[i for i in summary_metrics if i in report.index])
+    summary_report = report.loc[[i for i in summary_metrics if i in report.index]]
+    main_report = main_report.sort_values(by="f1-score", ascending=False)
+
+    report = pd.concat([main_report, summary_report])
+    metrics = pd.DataFrame([results.metrics])
+
+    return metrics, report
+
+def evaluate_baseline(model, X, y, mlb):
+    y_pred = model.predict(X)
+    y_scores = model.decision_function(X)
+
+    metrics = {
+        "test_accuracy": accuracy_score(y, y_pred),
+        "test_micro_f1": f1_score(y, y_pred, average='micro'),
+        "test_macro_f1": f1_score(y, y_pred, average='macro'),
+        "test_samples_f1": f1_score(y, y_pred, average='samples'),
+        "test_weighted_f1": f1_score(y, y_pred, average='weighted'),
+        "test_micro_precision": precision_score(y, y_pred, average='micro', zero_division=0),
+        "test_macro_precision": precision_score(y, y_pred, average='macro', zero_division=0),
+        "test_micro_recall": recall_score(y, y_pred, average='micro'),
+        "test_macro_recall": recall_score(y, y_pred, average='macro'),
+        "test_micro_auc": roc_auc_score(y, y_scores, average='micro'),
+        "test_macro_auc": roc_auc_score(y, y_scores, average='macro'),
+    }
+
+    report = classification_report(
+        y,
+        y_pred,
+        target_names=mlb.classes_,
+        zero_division=0,
+        output_dict=True
+    )
+
+    report_df = pd.DataFrame(report).transpose()
+    summary_metrics = ["micro avg", "macro avg", "weighted avg", "samples avg"]
+    main_report = report_df.drop(index=[i for i in summary_metrics if i in report_df.index])
+    summary_report = report_df.loc[[i for i in summary_metrics if i in report_df.index]]
+    main_report = main_report.sort_values(by="f1-score", ascending=False)
+
+    report = pd.concat([main_report, summary_report])
+    metrics = pd.DataFrame([metrics])
+
+    return metrics, report
+
 def find_model_path(
         task: str,
         model: str,
@@ -330,7 +407,7 @@ def find_model_path(
 
     model_path = None
     model_dirs_path = Path(f"../models") / model / task
-    metrics_files = list(model_dirs_path.resolve().rglob("evaluation_results/metrics.json"))
+    metrics_files = list(model_dirs_path.resolve().rglob("val_results/metrics.json"))
 
     if config == "best":
         best_f1 = 0
@@ -434,7 +511,7 @@ def preprocess_text(text: str,
         if "modernbert" in path_str:
             text = clean_text([text], "modernbert")[0]
         elif "tfidf" in path_str:
-            text = clean_text([text], "tfidf", nlp_core)[0]
+            text = clean_text([text], "tfidf", nlp_core, n_process=1)[0]
 
     return text
 
@@ -452,7 +529,6 @@ def predict_labels(
         with_drop: bool = None,
         only_t_s: bool = None,
         clean: bool = None,
-        description_dir: Path = Path("../data/descriptions"),
 ):
     try:
         model_path = find_model_path(task, model, config, metric, with_drop, only_t_s, clean)
@@ -496,12 +572,17 @@ def predict_labels(
         try:
             tokenizer = AutoTokenizer.from_pretrained(model_path)
             loaded_model = AutoModelForSequenceClassification.from_pretrained(model_path)
+            with open(model_path / "inference_config.json", "r") as f:
+                loaded_config = json.load(f)
 
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             loaded_model.to(device)
             loaded_model.eval()
 
-            inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=2048)
+            inputs = tokenizer(text,
+                               return_tensors="pt",
+                               truncation=loaded_config["TRUNCATION"],
+                               max_length=loaded_config["MAX_LENGTH"])
             inputs = {k: v.to(device) for k, v in inputs.items()}
 
             with torch.no_grad():
@@ -509,7 +590,7 @@ def predict_labels(
 
             logits = outputs.logits
             probs = torch.sigmoid(logits).cpu().numpy()[0]
-            y_pred_binary = (probs >= 0.5).astype(int)
+            y_pred_binary = (probs >= loaded_config["THRESHOLD"]).astype(int)
 
             labels["predicted_labels"] = mlb.inverse_transform(y_pred_binary.reshape(1, -1))[0]
             prob_pairs = list(zip(mlb.classes_, probs))
