@@ -12,9 +12,11 @@ from pathlib import Path
 from spacy import Language
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import json
-from sklearn.metrics import f1_score, accuracy_score, roc_auc_score, precision_score, recall_score, classification_report
+from sklearn.metrics import f1_score, accuracy_score, roc_auc_score, precision_score, recall_score, \
+    classification_report, mutual_info_score, hamming_loss
 from transformers import Trainer
 from scipy.special import expit
+
 
 def make_pattern(flag: str) -> Pattern:
     if not isinstance(flag, str):
@@ -302,12 +304,10 @@ def split_dataframe(df: pd.DataFrame,
     return df_train, df_val, df_test, mlb, num_labels
 
 
-def evaluate_finetuned(model, training_args, compute_metrics, data_collator, dataset, threshold, mlb):
-
+def evaluate_finetuned(model, training_args, data_collator, dataset, threshold, mlb):
     eval_trainer = Trainer(
         model=model,
         args=training_args,
-        compute_metrics=compute_metrics,
         data_collator=data_collator,
         eval_dataset=dataset
     )
@@ -319,6 +319,21 @@ def evaluate_finetuned(model, training_args, compute_metrics, data_collator, dat
 
     probs = expit(logits)
     preds = (probs >= threshold).astype(int)
+
+    metrics = {
+        "test_accuracy": accuracy_score(labels, preds),
+        "test_micro_f1": f1_score(labels, preds, average='micro'),
+        "test_macro_f1": f1_score(labels, preds, average='macro'),
+        "test_weighted_f1": f1_score(labels, preds, average='weighted'),
+        "test_samples_f1": f1_score(labels, preds, average='samples'),
+        "test_micro_precision": precision_score(labels, preds, average='micro', zero_division=0),
+        "test_macro_precision": precision_score(labels, preds, average='macro', zero_division=0),
+        "test_micro_recall": recall_score(labels, preds, average='micro'),
+        "test_macro_recall": recall_score(labels, preds, average='macro'),
+        "test_micro_auc": roc_auc_score(labels, probs, average='micro'),
+        "test_macro_auc": roc_auc_score(labels, probs, average='macro'),
+        "test_hamming_loss": hamming_loss(y_true=labels, y_pred=preds)
+    }
 
     report = classification_report(
         labels,
@@ -335,9 +350,10 @@ def evaluate_finetuned(model, training_args, compute_metrics, data_collator, dat
     main_report = main_report.sort_values(by="f1-score", ascending=False)
 
     report = pd.concat([main_report, summary_report])
-    metrics = pd.DataFrame([results.metrics])
+    metrics = pd.DataFrame([metrics])
 
-    return metrics, report
+    return metrics, report, labels, probs
+
 
 def evaluate_baseline(model, X, y, mlb):
     y_pred = model.predict(X)
@@ -375,6 +391,38 @@ def evaluate_baseline(model, X, y, mlb):
     metrics = pd.DataFrame([metrics])
 
     return metrics, report
+
+
+def find_optimal_thresholds(y_true, y_probs, mlb):
+    n_classes = y_true.shape[1]
+
+    best_thresholds = np.full(n_classes, 0.5)
+    threshold_candidates = np.linspace(0.01, 0.99, 1000)
+
+    for i in tqdm(range(n_classes)):
+        y_true_col = y_true[:, i]
+        y_prob_col = y_probs[:, i]
+
+        class_name = mlb.classes_[i]
+
+        best_score = -1
+        best_t = 0.5
+
+        for t in threshold_candidates:
+            y_pred_t = (y_prob_col >= t).astype(int)
+
+            score = f1_score(y_true_col, y_pred_t, zero_division=0)
+
+            if score > best_score:
+                best_score = score
+                best_t = t
+
+        best_thresholds[i] = best_t
+
+        tqdm.write(f"{class_name} threshold: {best_t:.3f} | max F1: {best_score:.4f}")
+
+    return best_thresholds
+
 
 def find_model_path(
         task: str,
@@ -516,7 +564,6 @@ def preprocess_text(text: str,
     return text
 
 
-
 def predict_labels(
         text: str,
         task: str,
@@ -565,15 +612,22 @@ def predict_labels(
 
             sorted_raw = sorted(raw_pairs, key=lambda x: x[1], reverse=True)
 
-            labels["labels_n_values"] = {label: float(val) for label, val in sorted_raw}
+            labels["labels_n_values"] = {
+                label: (float(val), 0.0)
+                for label, val in sorted_raw
+            }
         except Exception as e:
             return {"error": f"Failed to run TF-IDF LinearSVC prediction. Details: {str(e)}"}
     elif model == "finetuned":
         try:
             tokenizer = AutoTokenizer.from_pretrained(model_path)
             loaded_model = AutoModelForSequenceClassification.from_pretrained(model_path)
+
             with open(model_path / "inference_config.json", "r") as f:
                 loaded_config = json.load(f)
+
+            with open(model_path / "thresholds.json", "r") as f:
+                loaded_thresholds = np.array(json.load(f))
 
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             loaded_model.to(device)
@@ -590,16 +644,31 @@ def predict_labels(
 
             logits = outputs.logits
             probs = torch.sigmoid(logits).cpu().numpy()[0]
-            y_pred_binary = (probs >= loaded_config["THRESHOLD"]).astype(int)
+            y_pred_binary = (probs >= loaded_thresholds).astype(int)
 
             labels["predicted_labels"] = mlb.inverse_transform(y_pred_binary.reshape(1, -1))[0]
-            prob_pairs = list(zip(mlb.classes_, probs))
+            prob_triplets = list(zip(mlb.classes_, probs, loaded_thresholds))
 
-            sorted_probs = sorted(prob_pairs, key=lambda x: x[1], reverse=True)
+            sorted_probs = sorted(prob_triplets, key=lambda x: x[1], reverse=True)
 
-            labels["labels_n_values"] = {label: float(val) for label, val in sorted_probs}
+            labels["labels_n_values"] = {
+                label: (float(val), float(thr))
+                for label, val, thr in sorted_probs
+            }
 
         except Exception as e:
             return {"error": f"Failed to run ModernBERT prediction. Details: {str(e)}"}
 
     return labels
+
+
+def get_description(label, chapter_df, code_df):
+    match = chapter_df[chapter_df["chapter"] == label]
+    if not match.empty:
+        return match.iloc[0]["long_title"]
+
+    match = code_df[code_df["icd_code"] == label]
+    if not match.empty:
+        return match.iloc[0]["long_title"]
+
+    return f"Description not found."

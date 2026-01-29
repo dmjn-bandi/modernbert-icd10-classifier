@@ -1,7 +1,7 @@
 import gradio as gr
 import json
 import pandas as pd
-from src.utils import predict_labels
+from src.utils import predict_labels, get_description
 import en_core_sci_sm
 
 NLP_CORE = en_core_sci_sm.load()
@@ -88,7 +88,7 @@ with gr.Blocks() as demo:
         y="label",
         color="predicted",
         color_map={"True": "green", "False": "red"},
-        tooltip=["label", "score", "predicted", "description"],
+        tooltip=["label", "score", "predicted", "threshold/margin", "description"],
     )
 
 
@@ -143,37 +143,26 @@ with gr.Blocks() as demo:
 
         table_data = []
         for label in labels_list:
-            match = CHAPTER_DESCRIPTIONS[CHAPTER_DESCRIPTIONS["chapter"] == label]
-            if not match.empty:
-                description = match.iloc[0]["long_title"]
-            else:
-                match = CODE_DESCRIPTIONS[CODE_DESCRIPTIONS["icd_code"] == label]
-                if not match.empty:
-                    description = match.iloc[0]["long_title"]
-                else:
-                    description = f"Description not found for: {label}"
+
+            description = get_description(label, CHAPTER_DESCRIPTIONS, CODE_DESCRIPTIONS)
+
             table_data.append([label, description])
 
         df_table = pd.DataFrame(table_data, columns=["Label", "Description"])
 
         data = []
-        for label, score in labels_values.items():
+
+        for label, (score, threshold) in labels_values.items():
+
             predicted = "True" if label in labels_list else "False"
 
-            match = CHAPTER_DESCRIPTIONS[CHAPTER_DESCRIPTIONS["chapter"] == label]
-            if not match.empty:
-                description = match.iloc[0]["long_title"]
-            else:
-                match = CODE_DESCRIPTIONS[CODE_DESCRIPTIONS["icd_code"] == label]
-                if not match.empty:
-                    description = match.iloc[0]["long_title"]
-                else:
-                    description = f"Description not found for: {label}"
+            description = get_description(label, CHAPTER_DESCRIPTIONS, CODE_DESCRIPTIONS)
 
             data.append({
                 "label": label,
                 "score": round(score, 3),
                 "predicted": predicted,
+                "threshold/margin": round(threshold, 3),
                 "description": description
             })
 
