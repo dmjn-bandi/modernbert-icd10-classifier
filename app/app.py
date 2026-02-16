@@ -88,7 +88,7 @@ with gr.Blocks() as demo:
         y="label",
         color="predicted",
         color_map={"True": "green", "False": "red"},
-        tooltip=["label", "score", "predicted", "threshold/margin", "description"],
+        tooltip=["label", "score", "predicted", "threshold", "description"],
     )
 
 
@@ -162,7 +162,7 @@ with gr.Blocks() as demo:
                 "label": label,
                 "score": round(score, 3),
                 "predicted": predicted,
-                "threshold/margin": round(threshold, 3),
+                "threshold": round(threshold, 3),
                 "description": description
             })
 

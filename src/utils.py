@@ -411,7 +411,7 @@ def find_optimal_thresholds(y_true, y_probs, mlb):
         for t in threshold_candidates:
             y_pred_t = (y_prob_col >= t).astype(int)
 
-            score = f1_score(y_true_col, y_pred_t, zero_division=0)
+            score = mutual_info_score(y_true_col, y_pred_t)
 
             if score > best_score:
                 best_score = score
@@ -419,7 +419,7 @@ def find_optimal_thresholds(y_true, y_probs, mlb):
 
         best_thresholds[i] = best_t
 
-        tqdm.write(f"{class_name} threshold: {best_t:.3f} | max F1: {best_score:.4f}")
+        tqdm.write(f"{class_name} threshold: {best_t:.3f}")
 
     return best_thresholds
 
@@ -606,9 +606,9 @@ def predict_labels(
 
             labels["predicted_labels"] = mlb.inverse_transform(y_pred)[0]
 
-            decision_scores = pipeline.decision_function([text])[0]
+            scores = pipeline.decision_function([text])[0]
 
-            raw_pairs = list(zip(mlb.classes_, decision_scores))
+            raw_pairs = list(zip(mlb.classes_, scores))
 
             sorted_raw = sorted(raw_pairs, key=lambda x: x[1], reverse=True)
 
@@ -626,8 +626,13 @@ def predict_labels(
             with open(model_path / "inference_config.json", "r") as f:
                 loaded_config = json.load(f)
 
-            with open(model_path / "thresholds.json", "r") as f:
-                loaded_thresholds = np.array(json.load(f))
+            threshold_file = model_path / "thresholds.json"
+
+            if threshold_file.exists():
+                with open(threshold_file, "r") as f:
+                    loaded_thresholds = np.array(json.load(f))
+            else:
+                loaded_thresholds = 0.5
 
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             loaded_model.to(device)
@@ -647,7 +652,13 @@ def predict_labels(
             y_pred_binary = (probs >= loaded_thresholds).astype(int)
 
             labels["predicted_labels"] = mlb.inverse_transform(y_pred_binary.reshape(1, -1))[0]
-            prob_triplets = list(zip(mlb.classes_, probs, loaded_thresholds))
+
+            if isinstance(loaded_thresholds, float):
+                current_thresholds = np.full(probs.shape, loaded_thresholds)
+            else:
+                current_thresholds = loaded_thresholds
+
+            prob_triplets = list(zip(mlb.classes_, probs, current_thresholds))
 
             sorted_probs = sorted(prob_triplets, key=lambda x: x[1], reverse=True)
 
