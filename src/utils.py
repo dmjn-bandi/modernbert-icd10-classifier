@@ -16,6 +16,7 @@ from sklearn.metrics import f1_score, accuracy_score, roc_auc_score, precision_s
     classification_report, mutual_info_score, hamming_loss
 from transformers import Trainer
 from scipy.special import expit
+from transformers_interpret import MultiLabelClassificationExplainer
 
 
 def make_pattern(flag: str) -> Pattern:
@@ -244,7 +245,7 @@ def split_dataframe(df: pd.DataFrame,
     mlb.fit(df[label_col])
 
     num_labels = len(mlb.classes_)
-    print(f"Total number of classes: {num_labels}")
+    print(f"Total number of labels: {num_labels}")
 
     group_df = df.groupby(group_col)[label_col].apply(
         lambda x: list(set([item for sublist in x for item in sublist]))).to_frame()
@@ -304,12 +305,12 @@ def split_dataframe(df: pd.DataFrame,
     return df_train, df_val, df_test, mlb, num_labels
 
 
-def evaluate_finetuned(model, training_args, data_collator, dataset, threshold, mlb):
+def evaluate_finetuned(model, tokenizer, training_args, dataset, threshold, mlb):
     eval_trainer = Trainer(
         model=model,
+        processing_class=tokenizer,
         args=training_args,
-        data_collator=data_collator,
-        eval_dataset=dataset
+        eval_dataset=dataset,
     )
 
     results = eval_trainer.predict(dataset)
@@ -322,14 +323,14 @@ def evaluate_finetuned(model, training_args, data_collator, dataset, threshold, 
 
     metrics = {
         "test_accuracy": accuracy_score(labels, preds),
-        "test_micro_f1": f1_score(labels, preds, average='micro'),
-        "test_macro_f1": f1_score(labels, preds, average='macro'),
-        "test_weighted_f1": f1_score(labels, preds, average='weighted'),
-        "test_samples_f1": f1_score(labels, preds, average='samples'),
+        "test_micro_f1": f1_score(labels, preds, average='micro', zero_division=0),
+        "test_macro_f1": f1_score(labels, preds, average='macro', zero_division=0),
+        "test_weighted_f1": f1_score(labels, preds, average='weighted', zero_division=0),
+        "test_samples_f1": f1_score(labels, preds, average='samples', zero_division=0),
         "test_micro_precision": precision_score(labels, preds, average='micro', zero_division=0),
         "test_macro_precision": precision_score(labels, preds, average='macro', zero_division=0),
-        "test_micro_recall": recall_score(labels, preds, average='micro'),
-        "test_macro_recall": recall_score(labels, preds, average='macro'),
+        "test_micro_recall": recall_score(labels, preds, average='micro', zero_division=0),
+        "test_macro_recall": recall_score(labels, preds, average='macro', zero_division=0),
         "test_micro_auc": roc_auc_score(labels, probs, average='micro'),
         "test_macro_auc": roc_auc_score(labels, probs, average='macro'),
         "test_hamming_loss": hamming_loss(y_true=labels, y_pred=preds)
@@ -355,22 +356,24 @@ def evaluate_finetuned(model, training_args, data_collator, dataset, threshold, 
     return metrics, report, labels, probs
 
 
-def evaluate_baseline(model, X, y, mlb):
-    y_pred = model.predict(X)
-    y_scores = model.decision_function(X)
+def evaluate_baseline(model, X, y, mlb, threshold=0.5):
+    y_scores = model.predict_proba(X)
+
+    y_pred = (y_scores >= threshold).astype(int)
 
     metrics = {
         "test_accuracy": accuracy_score(y, y_pred),
-        "test_micro_f1": f1_score(y, y_pred, average='micro'),
-        "test_macro_f1": f1_score(y, y_pred, average='macro'),
-        "test_samples_f1": f1_score(y, y_pred, average='samples'),
-        "test_weighted_f1": f1_score(y, y_pred, average='weighted'),
+        "test_micro_f1": f1_score(y, y_pred, average='micro', zero_division=0),
+        "test_macro_f1": f1_score(y, y_pred, average='macro', zero_division=0),
+        "test_samples_f1": f1_score(y, y_pred, average='samples', zero_division=0),
+        "test_weighted_f1": f1_score(y, y_pred, average='weighted', zero_division=0),
         "test_micro_precision": precision_score(y, y_pred, average='micro', zero_division=0),
         "test_macro_precision": precision_score(y, y_pred, average='macro', zero_division=0),
-        "test_micro_recall": recall_score(y, y_pred, average='micro'),
-        "test_macro_recall": recall_score(y, y_pred, average='macro'),
+        "test_micro_recall": recall_score(y, y_pred, average='micro', zero_division=0),
+        "test_macro_recall": recall_score(y, y_pred, average='macro', zero_division=0),
         "test_micro_auc": roc_auc_score(y, y_scores, average='micro'),
         "test_macro_auc": roc_auc_score(y, y_scores, average='macro'),
+        "test_hamming_loss": hamming_loss(y_true=y, y_pred=y_pred)
     }
 
     report = classification_report(
@@ -390,14 +393,14 @@ def evaluate_baseline(model, X, y, mlb):
     report = pd.concat([main_report, summary_report])
     metrics = pd.DataFrame([metrics])
 
-    return metrics, report
+    return metrics, report, y, y_scores
 
 
 def find_optimal_thresholds(y_true, y_probs, mlb):
     n_classes = y_true.shape[1]
 
     best_thresholds = np.full(n_classes, 0.5)
-    threshold_candidates = np.linspace(0.01, 0.99, 1000)
+    threshold_candidates = np.linspace(0.00, 1.00, 21)
 
     for i in tqdm(range(n_classes)):
         y_true_col = y_true[:, i]
@@ -405,13 +408,15 @@ def find_optimal_thresholds(y_true, y_probs, mlb):
 
         class_name = mlb.classes_[i]
 
+        y_pred_05 = (y_prob_col >= 0.5).astype(int)
+        score_at_05 = f1_score(y_true_col, y_pred_05)
+
         best_score = -1
         best_t = 0.5
 
         for t in threshold_candidates:
             y_pred_t = (y_prob_col >= t).astype(int)
-
-            score = mutual_info_score(y_true_col, y_pred_t)
+            score = f1_score(y_true_col, y_pred_t)
 
             if score > best_score:
                 best_score = score
@@ -419,7 +424,10 @@ def find_optimal_thresholds(y_true, y_probs, mlb):
 
         best_thresholds[i] = best_t
 
-        tqdm.write(f"{class_name} threshold: {best_t:.3f}")
+        tqdm.write(
+            f"{class_name:<10} | Opt. threshold: {best_t:.3f} | "
+            f"F1 Score(0.5): {score_at_05:.5f} -> Best F1 Score: {best_score:.5f}"
+        )
 
     return best_thresholds
 
@@ -431,7 +439,10 @@ def find_model_path(
         metric: str,
         with_drop: bool,
         only_t_s: bool,
-        clean: bool):
+        clean: bool,
+        weighted: bool,
+        thrs_tuned: bool
+):
     if not isinstance(task, str):
         raise TypeError(f"Argument 'task' must be a string, got {type(task).__name__}.")
 
@@ -444,14 +455,6 @@ def find_model_path(
     if not isinstance(metric, str):
         raise TypeError(f"Argument 'metric' must be a string, got {type(metric).__name__}.")
 
-    if not isinstance(with_drop, bool):
-        raise TypeError(f"Argument 'with_drop' must be a boolean, got {type(with_drop).__name__}.")
-
-    if not isinstance(only_t_s, bool):
-        raise TypeError(f"Argument 'only_t_s' must be a boolean, got {type(only_t_s).__name__}.")
-
-    if not isinstance(clean, bool):
-        raise TypeError(f"Argument 'bool' must be a boolean, got {type(clean).__name__}.")
 
     model_path = None
     model_dirs_path = Path(f"../models") / model / task
@@ -487,33 +490,39 @@ def find_model_path(
                     worst_f1 = current_f1
                     model_path = potential_model
 
-    elif config == "custom":
-        model_path = model_dirs_path / ("with_dropped_sections" if with_drop else "without_dropped_sections")
 
-        if only_t_s:
-            if clean:
-                if model == "finetuned":
-                    model_path = model_path / "modernbert_cleaned_t_s_dataset"
-                elif model == "baseline":
-                    model_path = model_path / "tfidf_cleaned_t_s_dataset"
-                else:
-                    raise ValueError(f"Unknown model: {model}")
-            else:
-                model_path = model_path / "t_s_dataset"
+    elif config == "custom":
+
+        sub_dir = "with_dropped_sections" if with_drop else "without_dropped_sections"
+
+        base_dir = model_dirs_path / sub_dir
+
+        dataset_type = "t_s_dataset" if only_t_s else "base_dataset"
+
+        if clean:
+
+            prefix = "modernbert_cleaned" if model == "finetuned" else "tfidf_cleaned"
+
+            folder_name = f"{prefix}_{dataset_type}"
+
         else:
-            if clean:
-                if model == "finetuned":
-                    model_path = model_path / "modernbert_cleaned_base_dataset"
-                elif model == "baseline":
-                    model_path = model_path / "tfidf_cleaned_base_dataset"
-                else:
-                    raise ValueError(f"Unknown model: {model}")
-            else:
-                model_path = model_path / "base_dataset"
+
+            folder_name = dataset_type
+
+        if weighted:
+            folder_name += "_weighted"
+
+        if thrs_tuned:
+            folder_name += "_threshold_tuned"
+
+        model_path = base_dir / folder_name
 
         if (model_path / "best_model").exists():
+
             model_path = model_path / "best_model"
+
         else:
+
             return None
     else:
         raise ValueError(f"Unknown config: {config}")
@@ -522,6 +531,7 @@ def find_model_path(
 
 
 def preprocess_text(text: str,
+                    free_text: bool,
                     model_path: Path,
                     nlp_core: Language,
                     t_s_config_data: dict):
@@ -544,17 +554,18 @@ def preprocess_text(text: str,
 
     path_str = str(model_path)
 
-    if "with_dropped_sections" in path_str:
-        if "t_s" in path_str:
-            text = section_manager(text, section_patterns, "keep",
-                                   t_s_config_data["with_dropped_sections"]["sections_to_keep"])
+    if not free_text:
+        if "with_dropped_sections" in path_str:
+            if "t_s" in path_str:
+                text = section_manager(text, section_patterns, "keep",
+                                       t_s_config_data["with_dropped_sections"]["sections_to_keep"])
+            else:
+                text = section_manager(text, section_patterns, "drop",
+                                       t_s_config_data["with_dropped_sections"]["sections_to_drop"])
         else:
-            text = section_manager(text, section_patterns, "drop",
-                                   t_s_config_data["with_dropped_sections"]["sections_to_drop"])
-    else:
-        if "t_s" in path_str:
-            text = section_manager(text, section_patterns, "keep",
-                                   t_s_config_data["without_dropped_sections"]["sections_to_keep"])
+            if "t_s" in path_str:
+                text = section_manager(text, section_patterns, "keep",
+                                       t_s_config_data["without_dropped_sections"]["sections_to_keep"])
     if "cleaned" in path_str:
         if "modernbert" in path_str:
             text = clean_text([text], "modernbert")[0]
@@ -564,10 +575,104 @@ def preprocess_text(text: str,
     return text
 
 
+def generate_heatmaps(xai_dict):
+    html_outputs = {}
+
+    for label, token_scores in xai_dict.items():
+        valid_scores = []
+
+        for word, score in token_scores:
+
+            if word:
+                valid_scores.append(abs(score))
+
+        max_abs_score = max(valid_scores) if valid_scores else 1.0
+        if max_abs_score == 0.0:
+            max_abs_score = 1.0
+
+        html_content = ('<div style="font-family: Arial, sans-serif; line-height: 1.6; font-size: 16px; '
+                        'background-color: #ffffff; color: #000000; padding: 15px; border: 1px solid #eee; '
+                        'border-radius: 5px;">')
+
+        for word, score in token_scores:
+
+            if word in {"[CLS]", "[SEP]"}:
+                continue
+
+            relative_score = abs(score) / max_abs_score
+
+            alpha = min(relative_score, 0.7)
+
+            if score > 0:
+                bg_color = f"rgba(0, 255, 0, {alpha:.3f})"
+            elif score < 0:
+                bg_color = f"rgba(255, 0, 0, {alpha:.3f})"
+            else:
+                bg_color = "transparent"
+
+            text_style = "color: #000;"
+
+            html_content += (f'<span style="background-color: {bg_color}; {text_style} padding: 1px 0px; '
+                             f'border-radius: 2px;">{word}</span> ')
+
+        html_content += '</div>'
+
+        html_outputs[label] = html_content
+
+    return html_outputs
+
+
+def get_shap_values(text, pipeline, expected_values, mlb_classes):
+
+    vectorizer = pipeline.named_steps['tfidf']
+    selector = pipeline.named_steps['selector']
+    classifier = pipeline.named_steps['clf']
+
+    X_tfidf = vectorizer.transform([text])
+    X_tfidf = selector.transform(X_tfidf)
+    x_instance = X_tfidf.toarray()[0]
+
+    feature_names = vectorizer.get_feature_names_out()
+    support = selector.get_support()
+    selected_feature_names = feature_names[support]
+
+    vocab = {name: i for i, name in enumerate(selected_feature_names)}
+
+    tokens = re.findall(r'\b\w+\b|[^\w\s]|\s+', text)
+
+    xai_dict = {}
+
+    for i, label in enumerate(mlb_classes):
+        estimator = classifier.estimators_[i]
+
+        if hasattr(estimator.coef_, 'toarray'):
+            beta = estimator.coef_.toarray()[0]
+        else:
+            beta = estimator.coef_[0]
+
+        shap_values = beta * (x_instance - expected_values)
+
+        token_scores = []
+        for token in tokens:
+            token_chk = token.strip().lower()
+
+            if token_chk and token_chk in vocab:
+                idx = vocab[token_chk]
+                score = float(shap_values[idx])
+            else:
+                score = 0.0
+
+            token_scores.append((token, score))
+
+        xai_dict[label] = token_scores
+
+    return xai_dict
+
+
 def predict_labels(
         text: str,
         task: str,
-        model: str,
+        model_type: str,
         config: str,
         free_text: bool,
         metric: str,
@@ -576,20 +681,21 @@ def predict_labels(
         with_drop: bool = None,
         only_t_s: bool = None,
         clean: bool = None,
+        weighted: bool = None,
+        thrs_tuned: bool = None
 ):
     try:
-        model_path = find_model_path(task, model, config, metric, with_drop, only_t_s, clean)
+        model_path = find_model_path(task, model_type, config, metric, with_drop, only_t_s, clean, weighted, thrs_tuned)
     except Exception as e:
         return {"error": f"Critical error during model search. Details: {str(e)}"}
 
     if model_path is None:
         return {"error": "Failed to find trained model with these settings."}
 
-    if not free_text:
-        try:
-            text = preprocess_text(text, model_path, nlp_core, t_s_config_data)
-        except Exception as e:
-            return {"error": f"Critical error during text preprocessing. Details: {str(e)}"}
+    try:
+        text = preprocess_text(text, free_text, model_path, nlp_core, t_s_config_data)
+    except Exception as e:
+        return {"error": f"Critical error during text preprocessing. Details: {str(e)}"}
 
     try:
         mlb = joblib.load(model_path / "mlb.joblib")
@@ -598,33 +704,11 @@ def predict_labels(
 
     labels = {}
 
-    if model == "baseline":
+    if model_type == "baseline":
         try:
             pipeline = joblib.load(model_path / "pipeline.joblib")
 
-            y_pred = pipeline.predict([text])
-
-            labels["predicted_labels"] = mlb.inverse_transform(y_pred)[0]
-
-            scores = pipeline.decision_function([text])[0]
-
-            raw_pairs = list(zip(mlb.classes_, scores))
-
-            sorted_raw = sorted(raw_pairs, key=lambda x: x[1], reverse=True)
-
-            labels["labels_n_values"] = {
-                label: (float(val), 0.0)
-                for label, val in sorted_raw
-            }
-        except Exception as e:
-            return {"error": f"Failed to run TF-IDF LinearSVC prediction. Details: {str(e)}"}
-    elif model == "finetuned":
-        try:
-            tokenizer = AutoTokenizer.from_pretrained(model_path)
-            loaded_model = AutoModelForSequenceClassification.from_pretrained(model_path)
-
-            with open(model_path / "inference_config.json", "r") as f:
-                loaded_config = json.load(f)
+            expected_values = joblib.load(model_path / "expected_values.joblib")
 
             threshold_file = model_path / "thresholds.json"
 
@@ -632,33 +716,80 @@ def predict_labels(
                 with open(threshold_file, "r") as f:
                     loaded_thresholds = np.array(json.load(f))
             else:
-                loaded_thresholds = 0.5
+                loaded_thresholds = np.full(len(mlb.classes_), 0.5)
 
+            probs = pipeline.predict_proba([text])[0]
+
+            y_pred = (probs >= loaded_thresholds).astype(int)
+
+            labels["predicted_labels"] = mlb.inverse_transform(y_pred.reshape(1, -1))[0]
+
+            prob_triplets = list(zip(mlb.classes_, probs, loaded_thresholds))
+
+            sorted_probs = sorted(prob_triplets, key=lambda x: x[1], reverse=True)
+
+            labels["labels_n_values"] = {
+                label: (float(val), float(thr))
+                for label, val, thr in sorted_probs
+            }
+
+            labels["heatmaps"] = generate_heatmaps(get_shap_values(text, pipeline, expected_values, mlb.classes_))
+
+
+        except Exception as e:
+            return {"error": f"Failed to run TF-IDF Logistic Regression prediction. Details: {str(e)}"}
+    elif model_type == "finetuned":
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(model_path)
+
+            id2label = {i: label for i, label in enumerate(mlb.classes_)}
+            label2id = {label: i for i, label in enumerate(mlb.classes_)}
+
+            model = AutoModelForSequenceClassification.from_pretrained(
+                model_path,
+                attn_implementation="eager",
+                id2label=id2label,
+                label2id=label2id
+            )
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            loaded_model.to(device)
-            loaded_model.eval()
+            model.to(device)
 
-            inputs = tokenizer(text,
-                               return_tensors="pt",
-                               truncation=loaded_config["TRUNCATION"],
-                               max_length=loaded_config["MAX_LENGTH"])
-            inputs = {k: v.to(device) for k, v in inputs.items()}
+            with open(model_path / "inference_config.json", "r") as f:
+                loaded_config = json.load(f)
+
+            tokenized_input = tokenizer(text,
+                                        return_tensors="pt",
+                                        truncation=loaded_config["TRUNCATION"],
+                                        max_length=loaded_config["MAX_LENGTH"])
+
+            cls_explainer = MultiLabelClassificationExplainer(model, tokenizer)
+            truncated_text = tokenizer.decode(tokenized_input["input_ids"][0], skip_special_tokens=True)
+
+            labels["heatmaps"] = generate_heatmaps(cls_explainer(truncated_text))
+
+            threshold_file = model_path / "thresholds.json"
+
+            if threshold_file.exists():
+                with open(threshold_file, "r") as f:
+                    loaded_thresholds = np.array(json.load(f))
+            else:
+                loaded_thresholds = np.full(len(mlb.classes_), 0.5)
+
+            model.eval()
+
+            model_input = {k: v.to(device) for k, v in tokenized_input.items()}
 
             with torch.no_grad():
-                outputs = loaded_model(**inputs)
+                outputs = model(**model_input)
 
             logits = outputs.logits
             probs = torch.sigmoid(logits).cpu().numpy()[0]
+
             y_pred_binary = (probs >= loaded_thresholds).astype(int)
 
             labels["predicted_labels"] = mlb.inverse_transform(y_pred_binary.reshape(1, -1))[0]
 
-            if isinstance(loaded_thresholds, float):
-                current_thresholds = np.full(probs.shape, loaded_thresholds)
-            else:
-                current_thresholds = loaded_thresholds
-
-            prob_triplets = list(zip(mlb.classes_, probs, current_thresholds))
+            prob_triplets = list(zip(mlb.classes_, probs, loaded_thresholds))
 
             sorted_probs = sorted(prob_triplets, key=lambda x: x[1], reverse=True)
 
