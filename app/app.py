@@ -4,7 +4,6 @@ import pandas as pd
 from src.utils import predict_labels, get_description
 import en_core_sci_sm
 
-
 NLP_CORE = en_core_sci_sm.load()
 
 with open("../t_s_config.json", "r", encoding="utf-8") as f:
@@ -12,8 +11,6 @@ with open("../t_s_config.json", "r", encoding="utf-8") as f:
 
 CHAPTER_DESCRIPTIONS = pd.read_json("../data/descriptions/icd_chapter_descriptions.json")
 CODE_DESCRIPTIONS = pd.read_json("../data/descriptions/icd_code_descriptions.json")
-
-
 
 with gr.Blocks() as demo:
     with gr.Group():

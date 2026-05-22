@@ -13,7 +13,7 @@ from spacy import Language
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import json
 from sklearn.metrics import f1_score, accuracy_score, roc_auc_score, precision_score, recall_score, \
-    classification_report, mutual_info_score, hamming_loss
+    classification_report, hamming_loss
 from transformers import Trainer
 from scipy.special import expit
 from transformers_interpret import MultiLabelClassificationExplainer
@@ -21,7 +21,7 @@ from transformers_interpret import MultiLabelClassificationExplainer
 
 def make_pattern(flag: str) -> Pattern:
     if not isinstance(flag, str):
-        raise TypeError(f"Argument 'flag' must be a string, got {type(flag).__name__}.")
+        raise TypeError(f"Parameter 'flag' must be a string, got {type(flag).__name__}.")
 
     words = flag.split()
     n = len(words)
@@ -52,11 +52,11 @@ def section_manager(text: str,
                     task: str = "check",
                     section_names: str | list | None = None) -> str | bool:
     if not isinstance(text, str):
-        raise TypeError(f"Argument 'text' must be a string, got {type(text).__name__}.")
+        raise TypeError(f"Parameter 'text' must be a string, got {type(text).__name__}.")
 
     if not isinstance(section_patterns, dict):
         raise TypeError(
-            f"Argument 'section_patterns' must be a dictionary, got {type(section_patterns).__name__}.")
+            f"Parameter 'section_patterns' must be a dictionary, got {type(section_patterns).__name__}.")
 
     if task == "check":
 
@@ -87,7 +87,7 @@ def section_manager(text: str,
             raise ValueError(f"No section name provided for '{task}' task")
         else:
             raise TypeError(
-                f"Argument 'section_names' must be a string or a list. Received type: {type(section_names).__name__}.")
+                f"Parameter 'section_names' must be a string or a list. Received type: {type(section_names).__name__}.")
 
         if len(target_sections) != len(set(target_sections)):
             raise ValueError("Duplicate entries found in 'section_names'.")
@@ -155,16 +155,16 @@ def section_manager(text: str,
 def clean_text(texts: list[str], mode: str = "modernbert", nlp_core: Language = None,
                batch_size: int = 32, n_process: int = 4) -> list[str]:
     if not isinstance(texts, list):
-        raise TypeError(f"Argument 'texts' must be a string list, got {type(texts).__name__}.")
+        raise TypeError(f"Parameter 'texts' must be a string list, got {type(texts).__name__}.")
 
     if not isinstance(mode, str):
-        raise TypeError(f"Argument 'mode' must be a string, got {type(mode).__name__}.")
+        raise TypeError(f"Parameter 'mode' must be a string, got {type(mode).__name__}.")
 
     if not isinstance(batch_size, int):
-        raise TypeError(f"Argument 'batch_size' must be an integer, got {type(batch_size).__name__}.")
+        raise TypeError(f"Parameter 'batch_size' must be an integer, got {type(batch_size).__name__}.")
 
     if not isinstance(n_process, int):
-        raise TypeError(f"Argument 'n_process' must be an integer, got {type(n_process).__name__}.")
+        raise TypeError(f"Parameter 'n_process' must be an integer, got {type(n_process).__name__}.")
 
     cleaned_texts = []
 
@@ -184,7 +184,7 @@ def clean_text(texts: list[str], mode: str = "modernbert", nlp_core: Language = 
     elif mode == "tfidf":
 
         if not isinstance(nlp_core, Language):
-            raise TypeError(f"Argument 'nlp_core' must be a spaCy Language model, got {type(nlp_core).__name__}.")
+            raise TypeError(f"Parameter 'nlp_core' must be a spaCy Language model, got {type(nlp_core).__name__}.")
 
         for doc in tqdm(nlp_core.pipe(texts, batch_size=batch_size, n_process=n_process, disable=["parser", "ner"]),
                         total=len(texts)):
@@ -219,7 +219,7 @@ def split_dataframe(df: pd.DataFrame,
                     n_splits: int = 5,
                     seed: int = 42):
     if not isinstance(df, pd.DataFrame):
-        raise TypeError(f"Argument 'df' must be a DataFrame, got {type(df).__name__}.")
+        raise TypeError(f"Parameter 'df' must be a DataFrame, got {type(df).__name__}.")
 
     if df.empty:
         raise ValueError("Input DataFrame is empty.")
@@ -233,13 +233,13 @@ def split_dataframe(df: pd.DataFrame,
             f"The specified group_col '{group_col}' is not in the DataFrame. Available columns: {list(df.columns)}")
 
     if not isinstance(n_splits, int):
-        raise TypeError(f"Argument 'n_splits' must be a integer, got {type(n_splits).__name__}.")
+        raise TypeError(f"Parameter 'n_splits' must be a integer, got {type(n_splits).__name__}.")
 
     if n_splits < 3:
         raise ValueError(f"The value of 'n_splits' must be at least 3.")
 
     if not isinstance(seed, int):
-        raise TypeError(f"Argument 'seed' must be a integer, got {type(seed).__name__}.")
+        raise TypeError(f"Parameter 'seed' must be a integer, got {type(seed).__name__}.")
 
     mlb = MultiLabelBinarizer()
     mlb.fit(df[label_col])
@@ -444,16 +444,16 @@ def find_model_path(
         thrs_tuned: bool
 ):
     if not isinstance(task, str):
-        raise TypeError(f"Argument 'task' must be a string, got {type(task).__name__}.")
+        raise TypeError(f"Parameter 'task' must be a string, got {type(task).__name__}.")
 
     if not isinstance(model, str):
-        raise TypeError(f"Argument 'model' must be a string, got {type(model).__name__}.")
+        raise TypeError(f"Parameter 'model' must be a string, got {type(model).__name__}.")
 
     if not isinstance(config, str):
-        raise TypeError(f"Argument 'config' must be a string, got {type(config).__name__}.")
+        raise TypeError(f"Parameter 'config' must be a string, got {type(config).__name__}.")
 
     if not isinstance(metric, str):
-        raise TypeError(f"Argument 'metric' must be a string, got {type(metric).__name__}.")
+        raise TypeError(f"Parameter 'metric' must be a string, got {type(metric).__name__}.")
 
 
     model_path = None
@@ -536,16 +536,16 @@ def preprocess_text(text: str,
                     nlp_core: Language,
                     t_s_config_data: dict):
     if not isinstance(text, str):
-        raise TypeError(f"Argument 'text' must be a string, got {type(text).__name__}.")
+        raise TypeError(f"Parameter 'text' must be a string, got {type(text).__name__}.")
 
     if not isinstance(model_path, Path):
-        raise TypeError(f"Argument 'model_path' must be a Path, got {type(model_path).__name__}.")
+        raise TypeError(f"Parameter 'model_path' must be a Path, got {type(model_path).__name__}.")
 
     if not isinstance(nlp_core, Language):
-        raise TypeError(f"Argument 'nlp_core' must be a spaCy Language model, got {type(nlp_core).__name__}.")
+        raise TypeError(f"Parameter 'nlp_core' must be a spaCy Language model, got {type(nlp_core).__name__}.")
 
     if not isinstance(t_s_config_data, dict):
-        raise TypeError(f"Argument 't_s_config_data' must be a dictionary, got {type(t_s_config_data).__name__}.")
+        raise TypeError(f"Parameter 't_s_config_data' must be a dictionary, got {type(t_s_config_data).__name__}.")
 
     section_patterns = {
         key: [make_pattern(start_s), make_pattern(end_s)]
